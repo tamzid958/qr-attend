@@ -1,6 +1,7 @@
 "use client"
 
 import DoorFrontOutlinedIcon from "@mui/icons-material/DoorFrontOutlined"
+import HistoryRoundedIcon from "@mui/icons-material/HistoryRounded"
 import KeyboardRoundedIcon from "@mui/icons-material/KeyboardRounded"
 import QrCodeScannerRoundedIcon from "@mui/icons-material/QrCodeScannerRounded"
 import SwapHorizRoundedIcon from "@mui/icons-material/SwapHorizRounded"
@@ -15,6 +16,8 @@ import MenuItem from "@mui/material/MenuItem"
 import Paper from "@mui/material/Paper"
 import Snackbar from "@mui/material/Snackbar"
 import Stack from "@mui/material/Stack"
+import Tab from "@mui/material/Tab"
+import Tabs from "@mui/material/Tabs"
 import TextField from "@mui/material/TextField"
 import Typography from "@mui/material/Typography"
 import { openDB, type IDBPDatabase } from "idb"
@@ -72,6 +75,7 @@ export function ScannerPageClient({ assignedEvents }: { assignedEvents: Assigned
   const [recentScans, setRecentScans] = useState<ScanEntry[]>([])
   const [busy, setBusy] = useState(false)
   const [shortCodeDraft, setShortCodeDraft] = useState("")
+  const [tab, setTab] = useState(0)
 
   useEffect(() => {
     if (assignedEvents.length === 1) setSelectedEventId(assignedEvents[0].id)
@@ -432,94 +436,75 @@ export function ScannerPageClient({ assignedEvents }: { assignedEvents: Assigned
         </Button>
       </Box>
 
-      {/* Main grid */}
-      <Box
-        sx={{
-          display: "grid",
-          gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" },
-          gap: 2,
-        }}
-      >
-        {/* Camera + result overlay + short code input */}
-        <Stack spacing={1.5}>
-          <Box sx={{ position: "relative", borderRadius: 1, overflow: "hidden" }}>
-            <QrScanner busy={busy} onDecode={handleDecode} />
-            {result && (
-              <Box sx={{ position: "absolute", inset: 0, zIndex: 10 }}>
-                <ScanResult result={result} />
-              </Box>
-            )}
-          </Box>
-
-          <TextField
-            fullWidth
-            size="small"
-            placeholder="Short code (e.g. AB3X7K)"
-            value={shortCodeDraft}
-            disabled={busy}
-            onChange={(e) => setShortCodeDraft(e.target.value.toUpperCase())}
-            onKeyDown={(e) => e.key === "Enter" && void handleShortCode()}
-            slotProps={{
-              input: {
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <KeyboardRoundedIcon fontSize="small" sx={{ color: "text.disabled" }} />
-                  </InputAdornment>
-                ),
-                endAdornment: (
-                  <InputAdornment position="end">
-                    <Button
-                      size="small"
-                      variant="contained"
-                      disabled={busy || !shortCodeDraft.trim()}
-                      onClick={() => void handleShortCode()}
-                      sx={{ minWidth: 64, bgcolor: "#0a0a0a", "&:hover": { bgcolor: "#222" } }}
-                    >
-                      Check In
-                    </Button>
-                  </InputAdornment>
-                ),
-                sx: { fontFamily: "monospace", letterSpacing: "0.1em", textTransform: "uppercase" },
-              },
-            }}
-          />
-        </Stack>
-
-        {/* Recent scans feed */}
-        <Paper
-          sx={{
-            display: { xs: "none", md: "flex" },
-            flexDirection: "column",
-            overflow: "hidden",
-          }}
+      {/* Tab switcher */}
+      <Paper sx={{ overflow: "hidden" }}>
+        <Tabs
+          value={tab}
+          onChange={(_, v: number) => setTab(v)}
+          variant="fullWidth"
+          sx={{ borderBottom: "1px solid", borderColor: "divider" }}
         >
-          <Box
-            sx={{
-              px: 2.5,
-              py: 1.75,
-              borderBottom: "1px solid",
-              borderColor: "divider",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-            }}
-          >
-            <Typography variant="subtitle2" fontWeight={700} letterSpacing="-0.01em">
-              Recent Scans
-            </Typography>
-            {recentScans.length > 0 && (
-              <Typography variant="caption" color="text.disabled">
-                {recentScans.length} total
-              </Typography>
-            )}
-          </Box>
+          <Tab icon={<QrCodeScannerRoundedIcon fontSize="small" />} iconPosition="start" label="Scan" />
+          <Tab
+            icon={<HistoryRoundedIcon fontSize="small" />}
+            iconPosition="start"
+            label={recentScans.length > 0 ? `History (${recentScans.length})` : "History"}
+          />
+        </Tabs>
 
-          <Box sx={{ flex: 1, overflowY: "auto", maxHeight: 460 }}>
+        {/* Scan tab */}
+        {tab === 0 && (
+          <Stack spacing={1.5} sx={{ p: 2 }}>
+            <Box sx={{ position: "relative", borderRadius: 1, overflow: "hidden" }}>
+              <QrScanner busy={busy} onDecode={handleDecode} />
+              {result && (
+                <Box sx={{ position: "absolute", inset: 0, zIndex: 10 }}>
+                  <ScanResult result={result} />
+                </Box>
+              )}
+            </Box>
+
+            <TextField
+              fullWidth
+              size="small"
+              placeholder="Short code (e.g. AB3X7K)"
+              value={shortCodeDraft}
+              disabled={busy}
+              onChange={(e) => setShortCodeDraft(e.target.value.toUpperCase())}
+              onKeyDown={(e) => e.key === "Enter" && void handleShortCode()}
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <KeyboardRoundedIcon fontSize="small" sx={{ color: "text.disabled" }} />
+                    </InputAdornment>
+                  ),
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <Button
+                        size="small"
+                        variant="contained"
+                        disabled={busy || !shortCodeDraft.trim()}
+                        onClick={() => void handleShortCode()}
+                        sx={{ minWidth: 64, bgcolor: "#0a0a0a", "&:hover": { bgcolor: "#222" } }}
+                      >
+                        Check In
+                      </Button>
+                    </InputAdornment>
+                  ),
+                  sx: { fontFamily: "monospace", letterSpacing: "0.1em", textTransform: "uppercase" },
+                },
+              }}
+            />
+          </Stack>
+        )}
+
+        {/* History tab */}
+        {tab === 1 && (
+          <Box sx={{ overflowY: "auto", maxHeight: 520 }}>
             {recentScans.length === 0 ? (
-              <Box sx={{ px: 2.5, py: 5, textAlign: "center" }}>
-                <QrCodeScannerRoundedIcon
-                  sx={{ fontSize: 32, color: "text.disabled", mb: 1, opacity: 0.4 }}
-                />
+              <Box sx={{ px: 2.5, py: 6, textAlign: "center" }}>
+                <HistoryRoundedIcon sx={{ fontSize: 32, color: "text.disabled", mb: 1, opacity: 0.4 }} />
                 <Typography variant="body2" color="text.disabled">
                   No scans yet
                 </Typography>
@@ -548,12 +533,7 @@ export function ScannerPageClient({ assignedEvents }: { assignedEvents: Assigned
                       }}
                     />
                     <Box sx={{ flex: 1, minWidth: 0 }}>
-                      <Typography
-                        variant="body2"
-                        fontWeight={600}
-                        noWrap
-                        sx={{ lineHeight: 1.35 }}
-                      >
+                      <Typography variant="body2" fontWeight={600} noWrap sx={{ lineHeight: 1.35 }}>
                         {entry.name}
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
@@ -573,8 +553,8 @@ export function ScannerPageClient({ assignedEvents }: { assignedEvents: Assigned
               ))
             )}
           </Box>
-        </Paper>
-      </Box>
+        )}
+      </Paper>
 
       <Snackbar
         autoHideDuration={4000}
