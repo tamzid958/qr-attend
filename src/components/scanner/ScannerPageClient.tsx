@@ -77,6 +77,26 @@ export function ScannerPageClient({ assignedEvents }: { assignedEvents: Assigned
     if (assignedEvents.length === 1) setSelectedEventId(assignedEvents[0].id)
   }, [assignedEvents])
 
+  const flushQueue = useCallback(async () => {
+    const db = await getOfflineDb()
+    const all = await db.getAll("checkin-queue")
+    let synced = 0
+    for (const entry of all as OfflineCheckin[]) {
+      const res = await fetch("/api/scanner/checkin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: entry.token, gateName: entry.gateName }),
+      }).catch(() => null)
+      // Remove if processed (ok) or already checked in (409) — don't retry indefinitely
+      const processed = res && (res.ok || res.status === 409)
+      if (processed && typeof entry.id === "number") {
+        await db.delete("checkin-queue", entry.id)
+        if (res.ok) synced++
+      }
+    }
+    if (synced > 0) setMessage(`${synced} offline check-in${synced > 1 ? "s" : ""} synced`)
+  }, [])
+
   useEffect(() => {
     setOnline(window.navigator.onLine)
     const handleOnline = () => {
@@ -90,7 +110,7 @@ export function ScannerPageClient({ assignedEvents }: { assignedEvents: Assigned
       window.removeEventListener("online", handleOnline)
       window.removeEventListener("offline", handleOffline)
     }
-  }, [])
+  }, [flushQueue])
 
   const assignedEvent = assignedEvents.find((e) => e.id === selectedEventId) ?? null
   const isEventActive = assignedEvent?.status === "active"
@@ -105,33 +125,14 @@ export function ScannerPageClient({ assignedEvents }: { assignedEvents: Assigned
     void new Audio(file).play().catch(() => undefined)
   }
 
-  const flushQueue = async () => {
-    const db = await getOfflineDb()
-    const all = await db.getAll("checkin-queue")
-    let synced = 0
-    for (const entry of all as OfflineCheckin[]) {
-      const res = await fetch("/api/scanner/checkin", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: entry.token, gateName: entry.gateName }),
-      }).catch(() => null)
-      if (res?.ok && typeof entry.id === "number") {
-        await db.delete("checkin-queue", entry.id)
-        synced++
-      }
-    }
-    if (synced > 0) setMessage(`${synced} offline check-in${synced > 1 ? "s" : ""} synced`)
-  }
-
-  const saveOffline = async (token: string) => {
+  const saveOffline = useCallback(async (token: string, currentGateName: string) => {
     const db = await getOfflineDb()
     await db.add("checkin-queue", {
       token,
-      gateName,
+      gateName: currentGateName,
       timestamp: new Date().toISOString(),
     } satisfies OfflineCheckin)
-    setMessage("Saved offline — will sync when reconnected")
-  }
+  }, [])
 
   const handleActivate = () => {
     const trimmed = gateNameDraft.trim()
@@ -153,55 +154,62 @@ export function ScannerPageClient({ assignedEvents }: { assignedEvents: Assigned
       if (busy) return
       const token = decodedText.replace("attendance://", "")
       setBusy(true)
-      try {
-        const res = await fetch("/api/scanner/checkin", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token, gateName }),
-        })
-        if (!res.ok) {
-          const err = (await res.json()) as ApiResponse<unknown>
-          if (err.error === "INVALID_TOKEN") {
-            setResult({ status: "INVALID" })
-            playSound("INVALID")
-          }
-        } else {
-          const json = (await res.json()) as ApiResponse<CheckinResult>
-          if (json.data) {
-            const checkin = json.data
-            setResult(checkin)
-            playSound(checkin.status)
-            setRecentScans((prev) =>
-              [
-                {
-                  name: checkin.attendee?.name ?? "Unknown",
-                  status: checkin.status,
-                  time: new Date().toLocaleTimeString([], {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  }),
-                  sub:
-                    checkin.status === "DUPLICATE"
-                      ? "Already checked in"
-                      : checkin.status === "INVALID"
-                        ? "Invalid QR"
-                        : "Checked in",
-                },
-                ...prev,
-              ].slice(0, 20),
-            )
-          }
+      // Always queue to IDB first so the scan is never lost
+      await saveOffline(token, gateName)
+      // Then attempt immediate sync
+      const res = await fetch("/api/scanner/checkin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, gateName }),
+      }).catch(() => null)
+      if (!res) {
+        setMessage("Saved offline — will sync when reconnected")
+      } else if (!res.ok) {
+        const err = (await res.json()) as ApiResponse<unknown>
+        if (err.error === "INVALID_TOKEN") {
+          // Invalid token — remove from queue, nothing to sync
+          const db = await getOfflineDb()
+          const all = await db.getAll("checkin-queue") as OfflineCheckin[]
+          const entry = all.slice().reverse().find((e: OfflineCheckin) => e.token === token)
+          if (entry?.id !== undefined) await db.delete("checkin-queue", entry.id)
+          setResult({ status: "INVALID" })
+          playSound("INVALID")
         }
-      } catch {
-        await saveOffline(token)
+      } else {
+        const json = (await res.json()) as ApiResponse<CheckinResult>
+        if (json.data) {
+          const checkin = json.data
+          // Successfully synced — remove from queue
+          const db = await getOfflineDb()
+          const all = await db.getAll("checkin-queue") as OfflineCheckin[]
+          const entry = all.slice().reverse().find((e: OfflineCheckin) => e.token === token)
+          if (entry?.id !== undefined) await db.delete("checkin-queue", entry.id)
+          setResult(checkin)
+          playSound(checkin.status)
+          setRecentScans((prev) =>
+            [
+              {
+                name: checkin.attendee?.name ?? "Unknown",
+                status: checkin.status,
+                time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+                sub:
+                  checkin.status === "DUPLICATE"
+                    ? "Already checked in"
+                    : checkin.status === "INVALID"
+                      ? "Invalid QR"
+                      : "Checked in",
+              },
+              ...prev,
+            ].slice(0, 20),
+          )
+        }
       }
       window.setTimeout(() => {
         setResult(null)
         setBusy(false)
       }, 3500)
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [busy, gateName],
+    [busy, gateName, saveOffline],
   )
 
   const handleShortCode = async () => {
